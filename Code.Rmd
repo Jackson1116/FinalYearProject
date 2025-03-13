@@ -1,0 +1,176 @@
+---
+title: "FYP"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+library(tidyverse) # for manipulation with data
+library(text2vec) # for GloVe
+library(tm) # for text processing
+library(caret)
+library(psych)
+library(Matrix)
+library(expm)
+library(pso)
+library(xtable)
+
+set.seed(123)
+
+t <- readLines("theadventuresofsherlockholmes.txt")
+clean_text <- tolower(gsub("[^[:alpha:][:space:]]*", "", t))
+```
+
+```{r}
+skip_gram_window_size <- 3
+tokens <- space_tokenizer(clean_text)
+it = itoken(tokens, progressbar = FALSE)
+vocab <- create_vocabulary(it) %>% prune_vocabulary(5)
+vocab <- vocab[!(vocab$term %in% stopwords()),]
+vectorizer <- vocab_vectorizer(vocab)
+tcm <- create_tcm(it, vectorizer, 
+                  skip_grams_window = skip_gram_window_size)
+
+cat("Dimensions of tcm =", dim(tcm), "\n")
+```
+
+```{r}
+dim_word_emb <- 20
+
+# Training GloVe
+glove = GlobalVectors$new(rank = dim_word_emb, x_max = 10)
+
+wv_main = glove$fit_transform(tcm, n_iter = 50, convergence_tol = 0.01)
+
+wv_context = glove$components
+word_vectors = wv_main + t(wv_context)
+
+cat("Dim of word vector matrix =", dim(word_vectors))
+```
+
+```{r}
+write.csv(word_vectors, "rownames.csv", row.names=TRUE)
+```
+
+```{r}
+W <- word_vectors[c("woman", "wife", "man","husband","clock","mystery") , ]
+  # scale(word_vectors, center = TRUE, scale = TRUE)
+s <- nrow(W) # There are s words
+d <- ncol(W) # Dimensions of word embedding are d
+max_iterations <- 10000
+
+loss_function <- function(x) {
+  m <- round(0.5*(1+sqrt(1+8*length(x))))
+  
+  # if (m!=d) {
+  #   return("ERROR!!!")
+  # }
+  
+  U <- rep(0, m^2) %>% matrix(nrow = m)
+  U[upper.tri(U)] <- x
+  R <- expm(U - t(U))
+  
+  WR <- W %*% R
+  
+  term1 <- sum(WR^4)/s
+  term2 <- sum((rowSums(WR^2)/s)^2)
+  reg <- sum(abs(WR))/s
+
+  loss <- term2 - term1
+  return(loss)
+}
+
+result <- psoptim(
+  par = rep(NA, d*(d-1)/2),
+  fn = loss_function,
+  lower = rep(-3, d*(d-1)/2),
+  upper = rep(3, d*(d-1)/2),
+  control = list(maxit = max_iterations, trace = FALSE),
+)
+
+R <- rep(0, d^2) %>% matrix(nrow = d)
+R[upper.tri(R)] <- result$par
+R <- expm(R-t(R))
+WR <- W %*% R
+
+```
+
+```{r}
+#Accuracy
+
+#Define the percentages
+zero_perc <- 0.1
+large_perc <- 0.9
+
+#Calculate the norm of each word vector
+row_norms <- sqrt(rowSums(WR^2))
+
+# Calculate the thresholds for each word vector
+zero_thresholds <- zero_perc * row_norms
+large_thresholds <- large_perc * row_norms
+
+# Calculate the proportions
+zero_proportion <- sum(abs(WR) <= zero_thresholds) / (s * d)
+large_proportion <- sum(abs(WR) >= large_thresholds) / (s * d)
+
+accuracy <- zero_proportion + large_proportion
+
+```
+
+```{r}
+norm(W, type = "F")
+R %*% t(R)
+det(R)
+norm(WR, type = "F")
+```
+
+```{r}
+print(xtable(W, type = "latex"), file = "W6.tex")
+```
+
+```{r}
+print(xtable(WR, type = "latex"), file = "WR61.tex")
+```
+
+```{r}
+mat_values <- c(
+  -0.27, 0.24, -0.25, -0.40, 0.01, -0.41, 0.03, 1.10, 0.10, -0.75, 0.18, -0.22, -0.56, 0.15, 0.14, -0.60, -0.34, -0.20, 0.70, 1.09,
+  -0.02, -0.09, 0.26, -0.07, -1.27, 0.78, -0.33, -0.04, -0.03, 0.10, -0.44, -0.25, -0.31, -0.80, 0.34, 0.81, -0.55, -0.32, 0.67, 0.28,
+  1.09, -1.17, -0.78, -0.18, -0.22, -0.41, 0.21, -0.19, -0.76, -0.16, 0.04, 0.64, -0.16, -0.99, 0.40, 0.09, -0.04, -0.84, 0.41, 0.11,
+  -0.19, -0.17, -0.16, -0.63, -0.27, 0.35, -0.56, -0.53, 0.71, -0.54, 0.32, -0.40, 0.01, 0.38, -0.56, -0.20, 0.83, -0.41, -0.22, -0.37,
+  -0.10, -0.32, -0.27, -0.13, -0.63, 0.59, -0.01, 0.12, 0.23, 0.64, -0.18, -0.41, -0.19, 0.17, 0.31, -0.41, 0.23, -0.90, 0.00, -0.32,
+  -0.50, 0.05, 0.01, -0.27, 0.55, 0.21, 0.24, 0.37, -0.65, 0.25, 0.47, -0.13, 0.73, 0.06, -0.03, -0.64, 0.32, 0.43, 0.17, -0.04
+)
+
+# Create a 3x20 matrix
+A <- matrix(mat_values, nrow = 6, ncol = 20, byrow = TRUE)
+
+# Set row names
+rownames(A) <- c("woman", "wife", "man","husband","clock","mystery")
+```
+
+```{r}
+mat_values <- c(
+  0.08, -0.17, -0.11, -0.40, -0.43, 0.66, 0.92, -0.74, 0.21, -0.74, 0.03, 0.61, 0.14, 0.23, -1.06, -0.21, 0.54, -0.27, 0.05, 0.44,
+  0.09, 0.31, 0.01, 0.08, 0.09, -0.47, 0.09, -0.34, -0.07, 0.21, 0.03, 0.25, 0.34, -0.15, -0.07, -0.11, 0.38, -0.25, -2.04, -0.16,
+  -0.08, 0.72, 0.27, 0.18, 0.02, -0.29, 0.21, 0.13, 0.22, -0.07, 0.54, -0.10, 2.18, -0.12, -0.07, -0.25, -0.29, -0.72, -0.04, -0.12,
+  0.06, -0.26, 0.55, -0.30, 0.02, 0.23, -0.46, 0.71, 0.38, -0.03, 0.10, -0.09, -0.13, -0.34, -0.40, -0.72, -0.00, 1.27, -0.13, 0.15,
+  -0.19, -0.07, 0.30, 0.56, -0.15, 0.53, 0.37, 0.10, 0.29, 0.53, 0.40, 0.22, 0.07, -0.13, 0.39, -0.87, -0.06, 0.30, -0.63, -0.24,
+  -0.43, -0.44, -0.32, 0.05, 0.37, 0.23, 0.36, -0.10, -0.20, -0.41, -0.38, 0.63, -0.01, 0.30, 0.25, 0.22, -0.48, 0.50, 0.64, -0.44
+)
+
+
+# Create a 3x20 matrix
+B <- matrix(mat_values, nrow = 6, ncol = 20, byrow = TRUE)
+
+# Set row names
+rownames(B) <- c("woman", "wife", "man","husband","clock","mystery")
+```
+
+```{r}
+norm(A, type = "F")
+norm(B, type = "F")
+```
